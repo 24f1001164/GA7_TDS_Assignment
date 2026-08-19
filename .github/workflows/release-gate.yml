@@ -1,0 +1,98 @@
+name: TDS GA7 Release Gate
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+  id-token: none
+
+jobs:
+  release-gate-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: TDS identity: 24f1001164@ds.study.iitm.ac.in
+        run: echo "TDS identity: 24f1001164@ds.study.iitm.ac.in"
+
+      - name: Run release gate tests
+        run: |
+          python - <<'PY'
+          from fastapi.testclient import TestClient
+          from main import app
+
+          client = TestClient(app)
+
+          safe_payload = {
+              "target": "preview",
+              "event": "push",
+              "ref": "refs/heads/feature",
+              "workflow": {
+                  "trigger": "push",
+                  "permissions": {
+                      "contents": "read",
+                      "packages": "write",
+                      "id-token": "none"
+                  },
+                  "testsPassed": True,
+                  "matrixComplete": True,
+                  "failFast": False,
+                  "actions": [
+                      {
+                          "owner": "actions",
+                          "name": "checkout",
+                          "ref": "v4"
+                      },
+                      {
+                          "owner": "thirdparty",
+                          "name": "test",
+                          "ref": "0123456789abcdef0123456789abcdef01234567"
+                      }
+                  ]
+              },
+              "image": {
+                  "multiStage": True,
+                  "runsAsRoot": False,
+                  "secretMode": "none",
+                  "criticalVulnerabilities": 0,
+                  "digestPinned": True
+              }
+          }
+
+          response = client.post("/release-gate", json=safe_payload)
+
+          assert response.status_code == 200
+          result = response.json()
+
+          assert result["decision"] == "promote"
+          assert result["violations"] == []
+
+          unsafe_payload = safe_payload.copy()
+          unsafe_payload["workflow"] = dict(safe_payload["workflow"])
+          unsafe_payload["workflow"]["testsPassed"] = False
+
+          response = client.post("/release-gate", json=unsafe_payload)
+
+          assert response.status_code == 200
+
+          result = response.json()
+
+          assert result["decision"] == "block"
+          assert "TESTS_INCOMPLETE" in result["violations"]
+
+          print("All release-gate tests passed.")
+          PY
